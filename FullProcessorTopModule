@@ -1,0 +1,218 @@
+`timescale 1ns / 1ps
+
+
+module FullProcessorTopmodule( input ssdclk, input uart_in, //UART_IN = KEYBOARD 
+output reg [15:0] out_signal, output [3:0] Anode,
+ output [6:0] LED_out);
+wire [7:0] out_uart;
+wire rst;
+UART_receiver_multiple_Keys(
+     ssdclk,
+     uart_in, 
+  out_uart
+   );
+   
+    // all modules instantiations
+    // LED and SSD outputs case statements
+   
+   
+ wire [1:0] ledsel;
+ assign ledsel= out_uart[1:0];
+ 
+ wire [3:0] ssdsel;
+ assign ssdsel= out_uart[5:2];
+ 
+ assign rst=out_uart[6];
+ assign clk=out_uart[7];
+ 
+ always @(*) begin
+  out_signal[15:8]=out_uart;
+  end
+ 
+ 
+  
+ 
+wire [31:0] PC;
+
+
+wire [31:0] instr_mem_out;
+InstMem mod1(PC[7:2],instr_mem_out);
+
+wire [31:0] first_adder_output;
+ripple0 mod2(PC, 32'd4,0,first_adder_output);
+
+wire Branch, MemRead, MemtoReg,  MemWrite, ALUSrc, RegWrite;
+wire [1:0] ALUOp;
+
+control_unit mod3 (IF_ID_Inst[6:2],Branch, MemRead, MemtoReg,  MemWrite,
+ ALUSrc, RegWrite,ALUOp);
+ 
+ wire [31:0] regfileout1, regfileout2, final_out;
+ RegFile mod4(clk, rst,
+ IF_ID_Inst[19:15],IF_ID_Inst[24:20], MEM_WB_Rd,
+ final_out, MEM_WB_Ctrl, regfileout1, regfileout2);
+
+wire [31:0] immgen_out;
+immgen mod5(IF_ID_PC, immgen_out);
+
+
+
+
+//This is the mux after the RF
+wire [31:0] secondALUin;
+muxarray mod6( ID_EX_RegR2, ID_EX_Imm, ID_EX_Ctrl[7], secondALUin);
+
+//This is the ALU control unit
+wire [3:0] ALU_selection;
+ALU_control_unit mod7(ID_EX_Ctrl[5:6], ID_EX_Func[3] , ID_EX_Func[2:0], ALU_selection);
+
+
+//Main ALU
+wire Zero;
+wire [31:0] ALUout;
+ALU32bit mod8(
+ID_EX_RegR1, secondALUin,
+ALU_selection,
+ALUout, Zero);
+
+/*
+   wire [31:0] ID_EX_PC, ID_EX_RegR1, ID_EX_RegR2, ID_EX_Imm;
+wire [7:0] ID_EX_Ctrl;
+wire [3:0] ID_EX_Func;
+wire [31:0] ID_EX_Rs1, ID_EX_Rs2, ID_EX_Rd; //why is this 32 bits? should not it be 5 bits only?
+wire [7:0] control_in = {RegWrite, MemtoReg, Branch, MemRead, MemWrite, ALUOp, ALUSrc};
+wire [3:0] inst_mem_special = {instr_mem_out[30], instr_mem_out[14:12]};
+*/
+//shift left
+wire [31:0] shift_out;
+shift_one mod9(ID_EX_Imm, shift_out);
+
+//adder fr target address
+wire [31:0] second_adder_output;
+ripple0 mod10(ID_EX_PC, shift_out,0,second_adder_output);
+
+
+wire and_out;
+assign and_out= EX_MEM_Ctrl[2] & EX_MEM_Zero;
+
+wire[31:0] PCmux; 
+//Mux of target address
+muxarray mod11( first_adder_output, EX_MEM_BranchAddOut, and_out, PCmux);
+//PC register
+//I need to check from the clock
+Accumulativeflip mod14( PCmux, clk, rst,1,PC );
+
+
+
+/*
+   wire [31:0] EX_MEM_BranchAddOut, EX_MEM_ALU_out, EX_MEM_RegR2;
+   wire [4:0] EX_MEM_Ctrl;
+   wire [31:0] EX_MEM_Rd;
+   wire EX_MEM_Zero;
+   wire [4:0] control_in_ex_mum = {RegWrite, MemtoReg, Branch, MemRead, MemWrite};
+*/
+
+
+
+/*
+module DataMem
+(input clk, input MemRead, input MemWrite,
+input [5:0] addr, input [31:0] data_in, output [31:0] data_out);
+*/
+wire [31:0] datamemout;
+DataMem mod12( clk, MemRead, MemWrite,
+ALUout[7:2], regfileout2, datamemout);
+
+//mux after data memory
+muxarray mod13( MEM_WB_Mem_out, MEM_WB_ALU_out, MEM_WB_Ctrl, final_out);
+
+
+ always @(*)begin
+ case(ledsel)
+ 2'b00: out_signal[7:0]={RegWrite,ALUSrc,ALUOp,MemRead, MemWrite,
+  MemtoReg,Branch};
+ 2'b01: out_signal[7:0]={2'b0,ALU_selection,Zero,and_out};
+ 2'b10: out_signal[7:0]= regfileout1[7:0];
+ 2'b11: out_signal[7:0]= regfileout2[7:0];
+ endcase
+ 
+ 
+ end
+ 
+reg [12:0] num;
+ always @(*)begin
+  case(ssdsel)
+  4'b0000: num= PC;
+  4'b0001: num=first_adder_output;
+  4'b0010: num= second_adder_output;
+  4'b0011: num= PCmux;
+  
+  4'b0100: num=regfileout1;
+    4'b0101: num= regfileout2;
+    4'b0110: num= {instr_mem_out[19:15],instr_mem_out[24:20], instr_mem_out[11:7]};
+    4'b0111: num= immgen_out;
+    4'b1000: num=shift_out;
+      4'b1001: num=secondALUin;
+      4'b1010: num= ALUout;
+      4'b1011: num= datamemout;
+  endcase
+  end
+ 
+ wire [12:0] code=2334;
+  Four_Digit_Seven_Segment_Driver_Optimized modssd(ssdclk, num
+    ,Anode,LED_out);
+
+
+   
+   //Break Dance
+   /***********IF/ID************/
+   wire [31:0] IF_ID_PC, IF_ID_Inst;
+   //////////////////////////////////////////////////////////////////////////
+   N_bit_register #(64) IF_ID (clk,rst,1'b1,{PC, instr_mem_out}, {IF_ID_PC,IF_ID_Inst} );
+   // output reg Branch, MemRead, MemtoReg,  MemWrite, ALUSrc, RegWrite, output reg [1:0] ALUOp
+   //  (instr_mem_out[6:2],Branch, MemRead, MemtoReg,  MemWrite, ALUSrc, RegWrite,ALUOp);
+   
+   /***********ID/EX************/
+   wire [31:0] ID_EX_PC, ID_EX_RegR1, ID_EX_RegR2, ID_EX_Imm;
+   wire [7:0] ID_EX_Ctrl;
+   wire [3:0] ID_EX_Func;
+   wire [31:0] ID_EX_Rs1, ID_EX_Rs2, ID_EX_Rd; //why is this 32 bits? should not it be 5 bits only?
+   wire [7:0] control_in = {RegWrite, MemtoReg, Branch, MemRead, MemWrite, ALUOp, ALUSrc};
+   wire [3:0] inst_mem_special = {instr_mem_out[30], instr_mem_out[14:12]};
+ 
+   //Note that I added more 15 bits in this register to take rs1, rs2, rd
+    N_bit_register #(160) ID_EX (clk,rst,1'b1,
+    {control_in, PC,regfileout1, regfileout2, immgen_out, inst_mem_special,instr_mem_out[11:7], instr_mem_out[19:15], instr_mem_out[24:20], instr_mem_out[11:7]},
+    {ID_EX_Ctrl,ID_EX_PC,ID_EX_RegR1,ID_EX_RegR2,
+    ID_EX_Imm, ID_EX_Func,ID_EX_Rs1,ID_EX_Rs2,ID_EX_Rd} );
+    // Rs1 and Rs2 are needed later for the forwarding unit
+   
+   
+   /***********EX/MEM************/
+   wire [31:0] EX_MEM_BranchAddOut, EX_MEM_ALU_out, EX_MEM_RegR2;
+   wire [4:0] EX_MEM_Ctrl;
+   wire [31:0] EX_MEM_Rd;
+   wire EX_MEM_Zero;
+   wire [4:0] control_in_ex_mum = {RegWrite, MemtoReg, Branch, MemRead, MemWrite};
+   //I added 5 more bits for Rd
+    N_bit_register #(144) EX_MEM (clk,rst,1'b1,
+    {control_in_ex_mem, second_adder_output, Zero, ALUOut, regfileout2, instr_mem_out[11:7] },
+    {EX_MEM_Ctrl, EX_MEM_BranchAddOut, EX_MEM_Zero,
+    EX_MEM_ALU_out, EX_MEM_RegR2, EX_MEM_Rd} );
+   
+   
+   /***********MEM/WB************/
+   wire [31:0] MEM_WB_Mem_out, MEM_WB_ALU_out;
+   wire MEM_WB_Ctrl;
+   wire [31:0] MEM_WB_Rd;
+   wire control_in_mem_wb = MemtoReg;
+   //I added 5 more bits for the Rd
+    N_bit_register #(103) MEM_WB (clk,rst,1'b1,
+    {control_in_mem_wb, datamemout, ALUOut, instr_mem_out[11:7]},
+    {MEM_WB_Ctrl,MEM_WB_Mem_out, MEM_WB_ALU_out,
+    MEM_WB_Rd} );
+
+
+
+
+endmodule
